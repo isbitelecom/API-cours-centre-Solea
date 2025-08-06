@@ -24,25 +24,25 @@ def infos_cours():
         seen = set()
 
         for bloc in blocs:
-    texte = bloc.get_text(strip=True)
-    texte = texte.encode('utf-8', errors='ignore').decode('utf-8')
-    # Nettoyage simple : remplacer tirets longs par tirets normaux, supprimer espaces doublons
-    texte = texte.replace('–', '-').strip()
-    texte = ' '.join(texte.split())  # supprime espaces multiples
-    if any(mot in texte.lower() for mot in [
-            "horaire", "cours", "débutant", "intermédiaire", "avancé",
-            "stage", "tablao", "tarif"
-    ]):
-        if texte not in seen:
-            infos.append(texte)
-            seen.add(texte)
+            texte = bloc.get_text(strip=True)
+            texte = texte.encode('utf-8', errors='ignore').decode('utf-8')
+            # Nettoyage simple : remplacer tirets longs par tirets normaux, supprimer espaces doublons
+            texte = texte.replace('–', '-').strip()
+            texte = ' '.join(texte.split())  # supprime espaces multiples
 
+            if any(mot in texte.lower() for mot in [
+                    "horaire", "cours", "débutant", "intermédiaire", "avancé",
+                    "stage", "tablao", "tarif"
+            ]):
+                if texte not in seen:
+                    infos.append(texte)
+                    seen.add(texte)
 
         return jsonify({"informations": infos})
 
     except Exception as e:
         return jsonify({"erreur": str(e)})
 
-port = int(os.environ.get("PORT", 10000))
-app.run(host="0.0.0.0", port=port)
-
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
