@@ -1,14 +1,13 @@
 from flask import Flask, jsonify
 import requests
 from bs4 import BeautifulSoup
+import os
 
 app = Flask(__name__)
-
 
 @app.route('/')
 def accueil():
     return "Bienvenue sur l'API du Centre Soléa !"
-
 
 @app.route('/infos-cours')
 def infos_cours():
@@ -22,6 +21,7 @@ def infos_cours():
 
         blocs = soup.find_all(["h1", "h2", "h3", "p", "li"])
         infos = []
+        seen = set()
 
         for bloc in blocs:
             texte = bloc.get_text(strip=True)
@@ -30,15 +30,15 @@ def infos_cours():
                     "horaire", "cours", "débutant", "intermédiaire", "avancé",
                     "stage", "tablao", "tarif"
             ]):
-                infos.append(texte)
+                if texte not in seen:
+                    infos.append(texte)
+                    seen.add(texte)
 
         return jsonify({"informations": infos})
 
     except Exception as e:
         return jsonify({"erreur": str(e)})
 
-
-import os
-
 port = int(os.environ.get("PORT", 10000))
 app.run(host="0.0.0.0", port=port)
+
