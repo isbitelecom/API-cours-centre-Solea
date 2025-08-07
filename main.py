@@ -100,7 +100,7 @@ def infos_tablao():
 
 @app.route('/infos-stage-solea')
 def infos_stage_solea():
-    url = "https://www.flamencoenfrance.fr/stages/stage-de-flamenco-avec-veronica-vallecillo-2025-06-10"
+    url = "https://flamenconautas.com/stage-intensif-de-flamenco-du-10-au-14-septembre-2025"
     headers = {"User-Agent": "Mozilla/5.0"}
 
     try:
