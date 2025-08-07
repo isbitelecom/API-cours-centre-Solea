@@ -7,7 +7,6 @@ import re
 app = Flask(__name__)
 
 def remplacer_h_par_heure(texte):
-    # Remplace ex : "14h30" → "14 heure 30", "9h" → "9 heure"
     def repl(m):
         heure = m.group(1)
         minutes = m.group(2)
@@ -40,7 +39,7 @@ def infos_cours():
             texte = texte.encode('utf-8', errors='ignore').decode('utf-8')
             texte = texte.replace('–', '-').strip()
             texte = ' '.join(texte.split())
-            texte = remplacer_h_par_heure(texte)  # <-- Transformation ici
+            texte = remplacer_h_par_heure(texte)
 
             if any(mot in texte.lower() for mot in [
                     "horaire", "cours", "débutant", "intermédiaire", "avancé",
@@ -50,7 +49,6 @@ def infos_cours():
                     infos.append(texte)
                     seen.add(texte)
 
-        # Recherche du prix d'adhésion
         texte_complet = soup.get_text(separator=' ', strip=True)
         match = re.search(r'Adhésion annuelle\s*:\s*(\d+)\s*€', texte_complet, re.IGNORECASE)
         prix_adhesion = match.group(1) + ' €' if match else "Prix adhésion non disponible"
@@ -58,6 +56,46 @@ def infos_cours():
         return jsonify({
             "informations": infos,
             "prix_adhesion": prix_adhesion
+        })
+
+    except Exception as e:
+        return jsonify({"erreur": str(e)})
+
+@app.route('/infos-tablao')
+def infos_tablao():
+    url = "https://isbitelecom.com/prix-tablao"
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    try:
+        response = requests.get(url, headers=headers)
+        response.encoding = 'utf-8'
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        blocs = soup.find_all(["h1", "h2", "h3", "p", "li"])
+        infos = []
+        seen = set()
+
+        for bloc in blocs:
+            texte = bloc.get_text(strip=True)
+            texte = texte.encode('utf-8', errors='ignore').decode('utf-8')
+            texte = texte.replace('–', '-').strip()
+            texte = ' '.join(texte.split())
+            texte = remplacer_h_par_heure(texte)
+
+            if any(mot in texte.lower() for mot in [
+                    "tablao", "date", "artiste", "tarif"
+            ]):
+                if texte not in seen:
+                    infos.append(texte)
+                    seen.add(texte)
+
+        texte_complet = soup.get_text(separator=' ', strip=True)
+        match = re.search(r'Prix du tablao\s*:\s*(\d+)\s*€', texte_complet, re.IGNORECASE)
+        prix_tablao = match.group(1) + ' €' if match else "Prix tablao non disponible"
+
+        return jsonify({
+            "informations": infos,
+            "prix_tablao": prix_tablao
         })
 
     except Exception as e:
