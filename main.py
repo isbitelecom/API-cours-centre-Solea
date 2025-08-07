@@ -2,6 +2,7 @@ from flask import Flask, jsonify
 import requests
 from bs4 import BeautifulSoup
 import os
+import re
 
 app = Flask(__name__)
 
@@ -26,9 +27,8 @@ def infos_cours():
         for bloc in blocs:
             texte = bloc.get_text(strip=True)
             texte = texte.encode('utf-8', errors='ignore').decode('utf-8')
-            # Nettoyage simple : remplacer tirets longs par tirets normaux, supprimer espaces doublons
             texte = texte.replace('–', '-').strip()
-            texte = ' '.join(texte.split())  # supprime espaces multiples
+            texte = ' '.join(texte.split())
 
             if any(mot in texte.lower() for mot in [
                     "horaire", "cours", "débutant", "intermédiaire", "avancé",
@@ -38,7 +38,15 @@ def infos_cours():
                     infos.append(texte)
                     seen.add(texte)
 
-        return jsonify({"informations": infos})
+        # Recherche du prix d'adhésion
+        texte_complet = soup.get_text(separator=' ', strip=True)
+        match = re.search(r'Adhésion annuelle\s*:\s*(\d+)\s*€', texte_complet, re.IGNORECASE)
+        prix_adhesion = match.group(1) + ' €' if match else "Prix adhésion non disponible"
+
+        return jsonify({
+            "informations": infos,
+            "prix_adhesion": prix_adhesion
+        })
 
     except Exception as e:
         return jsonify({"erreur": str(e)})
