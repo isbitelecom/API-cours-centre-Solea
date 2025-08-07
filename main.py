@@ -62,8 +62,6 @@ def infos_cours():
         return jsonify({"erreur": str(e)})
 
 def parse_tablao_text(texte):
-    # Expression régulière pour extraire date, heure et artiste
-    # Exemple : "25/09/2025 a 21h, ana pérez"
     pattern = re.compile(r'(\d{2}/\d{2}/\d{4})\s*[àa]\s*(\d{1,2})h,\s*([^.,]+)', re.IGNORECASE)
     matches = pattern.findall(texte)
 
@@ -78,28 +76,4 @@ def parse_tablao_text(texte):
 
 @app.route('/infos-tablao')
 def infos_tablao():
-    url = "https://isbitelecom.com/prix-tablao"
-    headers = {"User-Agent": "Mozilla/5.0"}
-
-    try:
-        response = requests.get(url, headers=headers)
-        response.encoding = 'utf-8'
-        soup = BeautifulSoup(response.text, 'html.parser')
-
-        texte_complet = soup.get_text(separator=' ', strip=True)
-        tablaos = parse_tablao_text(texte_complet)
-
-        match = re.search(r'Prix du tablao\s*:\s*(\d+)\s*€', texte_complet, re.IGNORECASE)
-        prix_tablao = match.group(1) + ' €' if match else "Prix tablao non disponible"
-
-        return jsonify({
-            "tablaos": tablaos,
-            "prix_tablao": prix_tablao
-        })
-
-    except Exception as e:
-        return jsonify({"erreur": str(e)})
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    url = "https://isbitele
