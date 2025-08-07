@@ -61,6 +61,21 @@ def infos_cours():
     except Exception as e:
         return jsonify({"erreur": str(e)})
 
+def parse_tablao_text(texte):
+    # Expression régulière pour extraire date, heure et artiste
+    # Exemple : "25/09/2025 a 21h, ana pérez"
+    pattern = re.compile(r'(\d{2}/\d{2}/\d{4})\s*[àa]\s*(\d{1,2})h,\s*([^.,]+)', re.IGNORECASE)
+    matches = pattern.findall(texte)
+
+    tablaos = []
+    for date, heure, artiste in matches:
+        tablaos.append({
+            "date": date,
+            "heure": f"{heure}h",
+            "artiste": artiste.strip()
+        })
+    return tablaos
+
 @app.route('/infos-tablao')
 def infos_tablao():
     url = "https://isbitelecom.com/prix-tablao"
@@ -71,30 +86,14 @@ def infos_tablao():
         response.encoding = 'utf-8'
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        blocs = soup.find_all(["h1", "h2", "h3", "p", "li"])
-        infos = []
-        seen = set()
-
-        for bloc in blocs:
-            texte = bloc.get_text(strip=True)
-            texte = texte.encode('utf-8', errors='ignore').decode('utf-8')
-            texte = texte.replace('–', '-').strip()
-            texte = ' '.join(texte.split())
-            texte = remplacer_h_par_heure(texte)
-
-            if any(mot in texte.lower() for mot in [
-                    "tablao", "date", "artiste", "tarif"
-            ]):
-                if texte not in seen:
-                    infos.append(texte)
-                    seen.add(texte)
-
         texte_complet = soup.get_text(separator=' ', strip=True)
+        tablaos = parse_tablao_text(texte_complet)
+
         match = re.search(r'Prix du tablao\s*:\s*(\d+)\s*€', texte_complet, re.IGNORECASE)
         prix_tablao = match.group(1) + ' €' if match else "Prix tablao non disponible"
 
         return jsonify({
-            "informations": infos,
+            "tablaos": tablaos,
             "prix_tablao": prix_tablao
         })
 
