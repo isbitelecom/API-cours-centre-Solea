@@ -6,6 +6,17 @@ import re
 
 app = Flask(__name__)
 
+def remplacer_h_par_heure(texte):
+    # Remplace ex : "14h30" → "14 heure 30", "9h" → "9 heure"
+    def repl(m):
+        heure = m.group(1)
+        minutes = m.group(2)
+        if minutes:
+            return f"{heure} heure {minutes}"
+        else:
+            return f"{heure} heure"
+    return re.sub(r'(\d{1,2})h(\d{2})?', repl, texte)
+
 @app.route('/')
 def accueil():
     return "Bienvenue sur l'API du Centre Soléa !"
@@ -29,6 +40,7 @@ def infos_cours():
             texte = texte.encode('utf-8', errors='ignore').decode('utf-8')
             texte = texte.replace('–', '-').strip()
             texte = ' '.join(texte.split())
+            texte = remplacer_h_par_heure(texte)  # <-- Transformation ici
 
             if any(mot in texte.lower() for mot in [
                     "horaire", "cours", "débutant", "intermédiaire", "avancé",
