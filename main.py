@@ -21,14 +21,30 @@ def normalize_text(s: str) -> str:
     return s.strip()
 
 def remplacer_h_par_heure(texte: str) -> str:
-    # 18h30 -> 18 heure 30 ; 18h -> 18 heure ; 18:30 -> 18 heure 30
-    def repl_h(m):
-        h, mnt = m.group(1), m.group(2)
-        return f"{h} heure {mnt}" if mnt else f"{h} heure"
-    texte = re.sub(r"(\d{1,2})h(\d{2})?\b", repl_h, texte, flags=re.IGNORECASE)
-    texte = re.sub(r"(\d{1,2})\s?:\s?(\d{2})\b", lambda m: f"{m.group(1)} heure {m.group(2)}", texte)
-    # 18 h 30 -> 18 heure 30
-    texte = re.sub(r"(\d{1,2})\s?h\s?(\d{2})\b", lambda m: f"{m.group(1)} heure {m.group(2)}", texte, flags=re.IGNORECASE)
+    """
+    Convertit les heures pour TTS :
+    - 18h30  -> 18 heure 30
+    - 18h    -> 18 heure
+    - 18:30  -> 18 heure 30
+    - 8 h 05 -> 8 heure 5
+    - 18h-20h -> 18 heure - 20 heure
+    Masque les minutes '00'.
+    """
+    if not texte:
+        return ""
+
+    def repl(match: re.Match) -> str:
+        h = int(match.group(1))
+        mnt = match.group(2)
+        if mnt is None or re.fullmatch(r"0+", mnt):
+            return f"{h} heure"
+        return f"{h} heure {int(mnt)}"
+
+    # Gère HHhMM, HH:MM, HH h MM, et aussi HHh / HH: / HH h
+    texte = re.sub(r"\b(\d{1,2})\s*(?:h|:)\s*([0-5]?\d)?\b", repl, texte, flags=re.IGNORECASE)
+
+    # Nettoyage des espaces multiples
+    texte = re.sub(r"\s{2,}", " ", texte).strip()
     return texte
 
 def select_main_container(soup: BeautifulSoup) -> Tag:
