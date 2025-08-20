@@ -22,7 +22,7 @@ def accueil():
 
 @app.route('/infos-cours')
 def infos_cours():
-    url = "https://isbitelecom.com/prix-cours"
+    url = "https://www.centresolea.org/horaires-et-tarifs"
     headers = {"User-Agent": "Mozilla/5.0"}
 
     try:
@@ -76,7 +76,7 @@ def parse_tablao_text(texte):
 
 @app.route('/infos-tablao')
 def infos_tablao():
-    url = "https://isbitelecom.com/prix-tablao"
+    url = "https://www.centresolea.org"
     headers = {"User-Agent": "Mozilla/5.0"}
 
     try:
@@ -100,7 +100,7 @@ def infos_tablao():
 
 @app.route('/infos-stage-solea')
 def infos_stage_solea():
-    url = "https://flamenconautas.com/stage-intensif-de-flamenco-du-10-au-14-septembre-2025"
+    url = "https://www.centresolea.org/horaires-et-tarifs"
     headers = {"User-Agent": "Mozilla/5.0"}
 
     try:
