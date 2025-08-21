@@ -270,6 +270,78 @@ def parse_tablao_text_robuste(full_text: str):
         })
 
     return out
+    # -------- Helpers STAGE (robustes)
+
+def _fetch_text(url: str, headers: dict) -> str:
+    # Timeout (connect=5s, read=45s) + petite tolérance réseau
+    r = requests.get(url, headers=headers, timeout=(5, 45))
+    r.raise_for_status()
+    r.encoding = "utf-8"
+    soup = BeautifulSoup(r.text, "lxml")
+    replace_br_with_newlines(soup)
+    return normalize_text(soup.get_text(separator="\n", strip=True))
+
+def parse_stage_text_robuste(full_text: str) -> list[dict]:
+    """
+    Cherche des occurrences de STAGE autour d'une date + heure, en s'appuyant
+    sur le parseur tablao robuste mais en forçant la présence du mot 'stage'
+    dans le même segment de texte.
+    Retour: [{date:'DD/MM/YYYY', heure:'20h30', titre:'...', tag:'stage'}]
+    """
+    txt = normalize_text(full_text)
+
+    # On découpe par paragraphes/lignes pour isoler le contexte
+    blocks = [b.strip() for b in re.split(r"\n{1,}", txt) if b.strip()]
+    out = []
+    seen = set()
+
+    # Réutilise la logique date/heure de parse_tablao_text
+    mois = r"(?:janvier|février|fevrier|mars|avril|mai|juin|juillet|ao[uû]t|septembre|octobre|novembre|d[ée]cembre|janv|févr|fevr|sept|oct|nov|déc|dec)"
+    date_num = r"(?:\d{1,2}[\/\-.]\d{1,2}(?:[\/\-.]\d{2,4})?)"
+    date_txt = rf"(?:\d{{1,2}}\s+{mois}(?:\s+\d{{4}})?)"
+    date_any = rf"(?:{date_num}|{date_txt})"
+    heure = r"(\d{1,2})\s*(?:h|:)\s*([0-5]?\d)?"
+
+    # Stage doit être proche (même bloc)
+    pat = re.compile(
+        rf"(?i)\bstages?\b.*?(?P<date>{date_any}).{{0,60}}{heure}"
+        rf"|(?P<date2>{date_any}).{{0,60}}{heure}.*?\bstages?\b"
+    )
+
+    def _parse_date_str_local(s: str):
+        return _parse_date_str(s)  # utilise ton helper global
+
+    for b in blocks:
+        if not re.search(r"(?i)\bstages?\b", b):
+            continue
+        for m in pat.finditer(b):
+            d_raw = m.group("date") or m.group("date2")
+            if not d_raw:
+                continue
+            ymd = _parse_date_str_local(d_raw)
+            date_fmt = _fmt_ddmmyyyy(*ymd) if ymd else d_raw
+            h = m.group(2) if m.group(2) else m.group(4)  # groupe heure (HH)
+            mn = m.group(3) if m.group(3) else m.group(5) # groupe minutes (MM)
+            if not h:
+                continue
+            heure_fmt = f"{int(h)}h{mn}" if mn else f"{int(h)}h"
+
+            # Titre = le reste du bloc sans "stages"
+            titre = re.sub(r"(?i)\bstages?\b", "", b)
+            titre = _clean_title(titre)
+
+            key = (date_fmt, heure_fmt, titre)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({
+                "date": date_fmt,
+                "heure": heure_fmt,
+                "titre": titre,
+                "tag": "stage"
+            })
+    return out
+
 
 # ---------- Routes
 
