@@ -272,7 +272,7 @@ def infos_tablao():
 @app.route("/infos-stage-solea")
 def infos_stage_solea():
     # On utilise la même page pour extraire horaires & niveaux
-    url = "https://isbitelecom.com/prix-tablao"
+    url = "https://www.centresolea.org/"
     headers = {"User-Agent": "Mozilla/5.0 (compatible; CentreSoleaBot/1.0)"}
 
     try:
