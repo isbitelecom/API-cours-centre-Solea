@@ -125,6 +125,54 @@ def parse_horaires(lines: list[str]) -> list[str]:
             res.append(ln)
     return res
 
+# >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+# EXTRACTION DES NIVEAUX SÉVILLANE(S)
+def extract_sevillane_levels(lines: list[str]) -> list[str]:
+    """
+    Détecte les niveaux pour Sévillane/Sévillanas partout dans la page.
+    Renvoie une liste normalisée (ex: ["Débutants", "Avancés"]).
+    """
+    levels = []
+    seen = set()
+
+    # 1) Lignes contenant "Sévillane/Sévillanas" + un mot de niveau
+    pat_sevi = re.compile(r"s[ée]villan[ae]s?", re.IGNORECASE)
+    pat_lvl  = re.compile(r"(débutant(?:e|s)?|debutant(?:e|s)?|avanc[ée]s?)", re.IGNORECASE)
+    for ln in lines:
+        if pat_sevi.search(ln):
+            m = pat_lvl.search(ln)
+            if m:
+                raw = m.group(1).lower()
+                norm = "Débutants" if "debut" in raw or "début" in raw else "Avancés"
+                if norm not in seen:
+                    seen.add(norm)
+                    levels.append(norm)
+
+    # 2) Fallback : si header "DANSE SÉVILLANE" et au moins 2 créneaux "Samedi : ...",
+    #    on suppose "Débutants" & "Avancés".
+    if not levels:
+        header_idx = None
+        for i, ln in enumerate(lines):
+            if re.search(r"^\s*danse\s+s[ée]villan[ae]s?\s*$", ln, re.IGNORECASE):
+                header_idx = i
+                break
+        if header_idx is not None:
+            stop_re = re.compile(r"^(planning|tarifs|danse\s+flamenco|horaires|adh[ée]sion)", re.IGNORECASE)
+            section = []
+            for ln in lines[header_idx+1:]:
+                if stop_re.search(ln):
+                    break
+                section.append(ln)
+            samedi_slots = [ln for ln in section if re.search(r"^\s*samedi\s*:", ln, re.IGNORECASE) and re.search(r"\d", ln)]
+            if len(samedi_slots) >= 2:
+                levels = ["Débutants", "Avancés"]
+
+    # Ordre : Débutants d'abord, puis Avancés
+    if len(levels) > 1:
+        levels.sort(key=lambda x: 0 if x.startswith("Début") else 1)
+    return levels
+# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
 # ---------- Routes
 
 @app.route("/")
@@ -158,6 +206,9 @@ def infos_cours():
         tarifs = parse_tarifs(informations)
         horaires = parse_horaires(informations)
 
+        # >>> NOUVEAU : niveaux Sévillane/Sévillanas
+        niveaux_sevillane = extract_sevillane_levels(informations)
+
         # Version "lecture" (sans normalisation horaire) + version "vocale" (18h30 -> 18 heure 30)
         informations_vocal = [remplacer_h_par_heure(l) for l in informations]
 
@@ -167,7 +218,9 @@ def infos_cours():
             "informations_vocal": informations_vocal,  # adapté TTS
             "prix_adhesion": prix_adhesion,
             "tarifs": tarifs,
-            "horaires": horaires
+            "horaires": horaires,
+            # >>> NOUVEAU : à lire par le voicebot
+            "niveaux_sevillane": niveaux_sevillane
         })
 
     except Exception as e:
