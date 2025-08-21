@@ -470,7 +470,7 @@ def infos_stage_solea():
             "stages_vocal": stages_vocal
         })
 
-    except requests.Timeout:
+        except requests.exceptions.Timeout:
         return jsonify({"erreur": "Timeout lors de la récupération des pages sources."}), 504
     except Exception as e:
         return jsonify({"erreur": str(e)}), 500
