@@ -14,7 +14,7 @@ def normalize_text(s: str) -> str:
     if not s:
         return ""
     s = s.replace("\r", "\n").replace("\t", " ")
-    s = s.replace(NBSP, " ").replace("–", "-")
+    s = s.replace(NBSP, " ").replace("–", "-").replace("—", "-")
     # Compacte espaces multiples mais conserve les retours de ligne.
     s = re.sub(r"[ \u2009\u202f]+", " ", s)
     s = re.sub(r"\n{3,}", "\n\n", s)
@@ -42,6 +42,9 @@ def remplacer_h_par_heure(texte: str) -> str:
 
     # Gère HHhMM, HH:MM, HH h MM, et aussi HHh / HH: / HH h
     texte = re.sub(r"\b(\d{1,2})\s*(?:h|:)\s*([0-5]?\d)?\b", repl, texte, flags=re.IGNORECASE)
+
+    # Uniformise les tirets d'intervalles : " - "
+    texte = re.sub(r"\s?[-–—]\s?", " - ", texte)
 
     # Nettoyage des espaces multiples
     texte = re.sub(r"\s{2,}", " ", texte).strip()
@@ -173,6 +176,101 @@ def extract_sevillane_levels(lines: list[str]) -> list[str]:
     return levels
 # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
+# ---------- Helpers dates/tablao (parseur robuste)
+
+MONTHS_FR = {
+    "janvier": 1, "février": 2, "fevrier": 2, "mars": 3, "avril": 4, "mai": 5,
+    "juin": 6, "juillet": 7, "août": 8, "aout": 8, "septembre": 9,
+    "octobre": 10, "novembre": 11, "décembre": 12, "decembre": 12,
+    "janv": 1, "févr": 2, "fevr": 2, "sept": 9, "oct": 10, "nov": 11, "déc": 12, "dec": 12
+}
+
+def _parse_date_str(s: str):
+    """Renvoie (yyyy, mm, dd) si possible, sinon None. Accepte 12/10/2025, 12-10-2025, 12 octobre 2025, 12 oct 2025."""
+    s = (s or "").strip().lower()
+    # 1) Formats numériques
+    m = re.search(r"\b(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.](\d{2,4}))?\b", s)
+    if m:
+        d, mth, y = int(m.group(1)), int(m.group(2)), m.group(3)
+        y = int(y) if y else None
+        if y is not None and y < 100:
+            y += 2000
+        return (y, mth, d)
+    # 2) Formats textuels (12 octobre 2025 / 12 oct 2025)
+    m2 = re.search(r"\b(\d{1,2})\s+([a-zéûîôàèùç]{3,9})\s*(\d{4})?\b", s, flags=re.IGNORECASE)
+    if m2:
+        d = int(m2.group(1))
+        mon = m2.group(2).lower()
+        mon = MONTHS_FR.get(mon, MONTHS_FR.get(mon[:4], None))
+        if mon:
+            y = int(m2.group(3)) if m2.group(3) else None
+            return (y, mon, d)
+    return None
+
+def _fmt_ddmmyyyy(y, m, d):
+    if y and m and d:
+        return f"{d:02d}/{m:02d}/{y:04d}"
+    if m and d:
+        return f"{d:02d}/{m:02d}"
+    return None
+
+def _clean_title(t: str) -> str:
+    t = (t or "").strip(" \n\t-–—,:;")
+    return normalize_text(t)[:200]
+
+def parse_tablao_text_robuste(full_text: str):
+    """
+    Extrait TOUTES les dates/horaires/titres possibles depuis la page d’accueil,
+    même si le format varie (12/10/2025 à 20h — Titre) ou (Samedi 12 octobre – 20 h 30 : Titre).
+    Retourne une liste de dicts: {date, heure, titre, artiste(=titre)}
+    """
+    txt = normalize_text(full_text)
+
+    # Pattern combiné: date (numérique OU mois FR) + séparateur + heure + (titre optionnel)
+    mois = r"(?:janvier|février|fevrier|mars|avril|mai|juin|juillet|ao[uû]t|septembre|octobre|novembre|d[ée]cembre|janv|févr|fevr|sept|oct|nov|déc|dec)"
+    date_num = r"(?:\d{1,2}[\/\-.]\d{1,2}(?:[\/\-.]\d{2,4})?)"
+    date_txt = rf"(?:\d{{1,2}}\s+{mois}(?:\s+\d{{4}})?)"
+    date_any = rf"(?:{date_num}|{date_txt})"
+
+    # heure: 20h, 20 h, 20h30, 20:30
+    heure = r"(\d{1,2})\s*(?:h|:)\s*([0-5]?\d)?"
+
+    # autoriser différents séparateurs avant l'heure et capturer un titre court après
+    pat = re.compile(
+        rf"(?P<date>{date_any})\s*(?:[àa]|[-–—]|,)?\s*{heure}(?:\s*[–—\-,:]\s*(?P<title>[^\n\r]+))?",
+        flags=re.IGNORECASE
+    )
+
+    seen = set()
+    out = []
+
+    for m in pat.finditer(txt):
+        date_raw = m.group("date")
+        h = m.group(1); mn = m.group(2)
+        titre = _clean_title(m.group("title") or "")
+
+        ymd = _parse_date_str(date_raw)
+        date_fmt = _fmt_ddmmyyyy(*ymd) if ymd else date_raw
+        if not date_fmt:
+            date_fmt = date_raw
+
+        # heure normalisée style "20h30" ou "20h"
+        heure_fmt = f"{int(h)}h{mn}" if mn else f"{int(h)}h"
+
+        key = (date_fmt, heure_fmt, titre)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        out.append({
+            "date": date_fmt,
+            "heure": heure_fmt,
+            "titre": titre,
+            "artiste": titre,  # compat: certains clients attendent "artiste"
+        })
+
+    return out
+
 # ---------- Routes
 
 @app.route("/")
@@ -206,40 +304,24 @@ def infos_cours():
         tarifs = parse_tarifs(informations)
         horaires = parse_horaires(informations)
 
-        # >>> NOUVEAU : niveaux Sévillane/Sévillanas
+        # Niveaux Sévillane/Sévillanas
         niveaux_sevillane = extract_sevillane_levels(informations)
 
-        # Version "lecture" (sans normalisation horaire) + version "vocale" (18h30 -> 18 heure 30)
+        # Version "vocale" (18h30 -> 18 heure 30)
         informations_vocal = [remplacer_h_par_heure(l) for l in informations]
 
         return jsonify({
             "source": url,
-            "informations": informations,              # brut propre (avec sauts conservés)
+            "informations": informations,              # brut propre
             "informations_vocal": informations_vocal,  # adapté TTS
             "prix_adhesion": prix_adhesion,
             "tarifs": tarifs,
             "horaires": horaires,
-            # >>> NOUVEAU : à lire par le voicebot
             "niveaux_sevillane": niveaux_sevillane
         })
 
     except Exception as e:
         return jsonify({"erreur": str(e)}), 500
-
-def parse_tablao_text(texte: str):
-    # 12/10/2025 à 20h, Nom Artiste
-    pattern = re.compile(r"(\d{2}/\d{2}/\d{4})\s*[àa]\s*(\d{1,2})h(?:\s?(\d{2}))?\s*,\s*([^.,\n]+)", re.IGNORECASE)
-    matches = pattern.findall(texte)
-
-    tablaos = []
-    for date, heure, minutes, artiste in matches:
-        hh = f"{heure}h{minutes}" if minutes else f"{heure}h"
-        tablaos.append({
-            "date": date,
-            "heure": hh,
-            "artiste": normalize_text(artiste)
-        })
-    return tablaos
 
 @app.route("/infos-tablao")
 def infos_tablao():
@@ -254,7 +336,15 @@ def infos_tablao():
         replace_br_with_newlines(soup)
 
         texte_complet = normalize_text(soup.get_text(separator="\n", strip=True))
-        tablaos = parse_tablao_text(texte_complet)
+
+        # >>> Utiliser le parseur ROBUSTE (toutes les dates)
+        tablaos = parse_tablao_text_robuste(texte_complet)
+        tablaos_vocal = [
+            {
+                **t,
+                "heure_vocal": remplacer_h_par_heure(t.get("heure", "")),
+            } for t in tablaos
+        ]
 
         # Prix : accepte variantes et espaces insécables
         match = re.search(r"Prix\s+du\s+tablao\s*[:\-]?\s*(\d{1,3})\s*€", texte_complet, re.IGNORECASE)
@@ -262,7 +352,8 @@ def infos_tablao():
 
         return jsonify({
             "source": url,
-            "tablaos": tablaos,
+            "tablaos": tablaos,          # liste complète extraite
+            "tablaos_vocal": tablaos_vocal,
             "prix_tablao": prix_tablao
         })
 
@@ -271,34 +362,39 @@ def infos_tablao():
 
 @app.route("/infos-stage-solea")
 def infos_stage_solea():
-    # On utilise la même page pour extraire horaires & niveaux
-    url = "https://www.centresolea.org/"
+    """
+    Pour les STAGES, on ne scrape pas le site : on passe par l'API publique dédiée,
+    puis on renvoie tel quel (avec un champ vocal si besoin).
+    """
+    url = "https://api-cours-centre-solea.onrender.com/infos-stage-solea"
     headers = {"User-Agent": "Mozilla/5.0 (compatible; CentreSoleaBot/1.0)"}
 
     try:
-        response = requests.get(url, headers=headers, timeout=20)
-        response.raise_for_status()
-        response.encoding = "utf-8"
-        soup = BeautifulSoup(response.text, "lxml")
+        r = requests.get(url, headers=headers, timeout=20)
+        r.raise_for_status()
+        data = r.json()
 
-        main = select_main_container(soup)
-        replace_br_with_newlines(main)
+        # Si des horaires textuels existent, fournir aussi une version TTS
+        def add_vocal(obj):
+            if isinstance(obj, dict):
+                out = dict(obj)
+                for k, v in list(obj.items()):
+                    if isinstance(v, str) and re.search(r"\d\s*(?:h|:)\s*\d?", v, flags=re.I):
+                        out[k + "_vocal"] = remplacer_h_par_heure(v)
+                return out
+            return obj
 
-        lines = extract_lines(main)
-
-        # Horaires = lignes avec heures ; niveaux = lignes mentionnant les niveaux
-        horaires = parse_horaires(lines)
-
-        niveaux = []
-        for ln in lines:
-            if re.search(r"(d[ée]butant|interm[ée]diaire|inter[\s\-]?1|inter[\s\-]?2|avanc[ée]s?|t.?cap|ados?|enfants?|s[ée]villane)", ln, re.IGNORECASE):
-                if ln not in niveaux:
-                    niveaux.append(ln)
+        if isinstance(data, dict):
+            data_vocal = {k: add_vocal(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            data_vocal = [add_vocal(x) for x in data]
+        else:
+            data_vocal = data
 
         return jsonify({
             "source": url,
-            "horaires": "; ".join(horaires) if horaires else "Horaires non disponibles",
-            "niveaux": "; ".join(niveaux) if niveaux else "Niveaux non disponibles"
+            "data": data,
+            "data_vocal": data_vocal
         })
 
     except Exception as e:
