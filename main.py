@@ -363,42 +363,46 @@ def infos_tablao():
 @app.route("/infos-stage-solea")
 def infos_stage_solea():
     """
-    Pour les STAGES, on ne scrape pas le site : on passe par l'API publique dédiée,
-    puis on renvoie tel quel (avec un champ vocal si besoin).
+    IMPORTANT: ne pas appeler l'API elle-même (sinon boucle infinie).
+    On agrège du site et renvoie un JSON propre pour le voicebot.
+    Pour les tests: on renvoie TOUT ce qu'on trouve (même dates passées).
     """
-    url = "https://api-cours-centre-solea.onrender.com/infos-stage-solea"
     headers = {"User-Agent": "Mozilla/5.0 (compatible; CentreSoleaBot/1.0)"}
-
     try:
-        r = requests.get(url, headers=headers, timeout=20)
-        r.raise_for_status()
-        data = r.json()
+        # On combine accueil + horaires (sources probables d'annonces de stage)
+        txt_home = _fetch_text("https://www.centresolea.org", headers)
+        txt_hor  = _fetch_text("https://www.centresolea.org/horaires-et-tarifs", headers)
+        txt = f"{txt_home}\n\n{txt_hor}"
 
-        # Si des horaires textuels existent, fournir aussi une version TTS
-        def add_vocal(obj):
-            if isinstance(obj, dict):
-                out = dict(obj)
-                for k, v in list(obj.items()):
-                    if isinstance(v, str) and re.search(r"\d\s*(?:h|:)\s*\d?", v, flags=re.I):
-                        out[k + "_vocal"] = remplacer_h_par_heure(v)
-                return out
-            return obj
+        stages = parse_stage_text_robuste(txt)
 
-        if isinstance(data, dict):
-            data_vocal = {k: add_vocal(v) for k, v in data.items()}
-        elif isinstance(data, list):
-            data_vocal = [add_vocal(x) for x in data]
-        else:
-            data_vocal = data
+        # Variante TTS (heures -> "heure")
+        stages_vocal = [
+            {
+                **s,
+                "heure_vocal": remplacer_h_par_heure(s.get("heure", "")),
+            } for s in stages
+        ]
+
+        # Si rien trouvé, on renvoie un message clair (et la source)
+        if not stages:
+            return jsonify({
+                "source": ["https://www.centresolea.org", "https://www.centresolea.org/horaires-et-tarifs"],
+                "stages": [],
+                "message": "Aucune occurrence de 'stage' avec date/heure détectée dans les pages sources."
+            })
 
         return jsonify({
-            "source": url,
-            "data": data,
-            "data_vocal": data_vocal
+            "source": ["https://www.centresolea.org", "https://www.centresolea.org/horaires-et-tarifs"],
+            "stages": stages,
+            "stages_vocal": stages_vocal
         })
 
+    except requests.Timeout:
+        return jsonify({"erreur": "Timeout lors de la récupération des pages sources."}), 504
     except Exception as e:
         return jsonify({"erreur": str(e)}), 500
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
