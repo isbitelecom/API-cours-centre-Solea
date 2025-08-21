@@ -22,20 +22,25 @@ def normalize_text(s: str) -> str:
 def remplacer_h_par_heure(texte: str) -> str:
     if not texte:
         return ""
+
     def repl(match: re.Match) -> str:
         h = int(match.group(1))
         mnt = match.group(2)
         if mnt is None or re.fullmatch(r"0+", mnt):
             return f"{h} heure"
         return f"{h} heure {int(mnt)}"
+
     texte = re.sub(r"\b(\d{1,2})\s*(?:h|:)\s*([0-5]?\d)?\b", repl, texte, flags=re.IGNORECASE)
     texte = re.sub(r"\s?[-–—]\s?", " - ", texte)
     texte = re.sub(r"\s{2,}", " ", texte).strip()
     return texte
 
 def select_main_container(soup: BeautifulSoup) -> Tag:
-    for sel in ["main", "article", "[role=main]", "div.entry-content",
-                "div#content", "div.elementor-widget-container", "div.site-content"]:
+    for sel in [
+        "main", "article", "[role=main]",
+        "div.entry-content", "div#content",
+        "div.elementor-widget-container", "div.site-content",
+    ]:
         node = soup.select_one(sel)
         if node and node.get_text(strip=True):
             return node
@@ -48,8 +53,11 @@ def replace_br_with_newlines(container: Tag):
 def extract_lines(container: Tag) -> list[str]:
     lines = []
     for el in container.find_all(["h1", "h2", "h3", "h4", "p", "li"]):
-        txt = normalize_text(el.get_text(separator="\n", strip=True))
-        if txt and txt not in lines:
+        txt = el.get_text(separator="\n", strip=True)
+        txt = normalize_text(txt)
+        if not txt:
+            continue
+        if txt not in lines:
             lines.append(txt)
     final = []
     for block in lines:
@@ -60,10 +68,10 @@ def extract_lines(container: Tag) -> list[str]:
     return final
 
 def parse_adhesion(full_text: str) -> str:
-    m = re.search(r"Adh[ée]sion\s+annuelle\s*[:\-]?\s*(\d{1,3}(?:[ .]\d{3})?)\s*€", full_text, re.IGNORECASE)
+    m = re.search(r"Adh[ée]sion\s+annuelle\s*[:\-]?\s*(\d{1,3}(?:[ .]\d{3})?)\s*€", full_text, flags=re.IGNORECASE)
     if m:
         return f"{m.group(1).replace(' ', '').replace('.', ' ')} €".replace("  ", " ")
-    m2 = re.search(r"Adh[ée]sion[^\d]{0,20}(\d{1,3}(?:[ .]\d{3})?)\s*€", full_text, re.IGNORECASE)
+    m2 = re.search(r"Adh[ée]sion[^\d]{0,20}(\d{1,3}(?:[ .]\d{3})?)\s*€", full_text, flags=re.IGNORECASE)
     return f"{m2.group(1)} €" if m2 else "Prix adhésion non disponible"
 
 def parse_tarifs(lines: list[str]) -> dict:
@@ -93,9 +101,10 @@ def parse_horaires(lines: list[str]) -> list[str]:
     return res
 
 def extract_sevillane_levels(lines: list[str]) -> list[str]:
-    levels, seen = [], set()
+    levels = []
+    seen = set()
     pat_sevi = re.compile(r"s[ée]villan[ae]s?", re.IGNORECASE)
-    pat_lvl = re.compile(r"(débutant(?:e|s)?|debutant(?:e|s)?|avanc[ée]s?)", re.IGNORECASE)
+    pat_lvl  = re.compile(r"(débutant(?:e|s)?|debutant(?:e|s)?|avanc[ée]s?)", re.IGNORECASE)
     for ln in lines:
         if pat_sevi.search(ln):
             m = pat_lvl.search(ln)
@@ -105,27 +114,9 @@ def extract_sevillane_levels(lines: list[str]) -> list[str]:
                 if norm not in seen:
                     seen.add(norm)
                     levels.append(norm)
-    if not levels:
-        header_idx = None
-        for i, ln in enumerate(lines):
-            if re.search(r"^\s*danse\s+s[ée]villan[ae]s?\s*$", ln, re.IGNORECASE):
-                header_idx = i
-                break
-        if header_idx is not None:
-            stop_re = re.compile(r"^(planning|tarifs|danse\s+flamenco|horaires|adh[ée]sion)", re.IGNORECASE)
-            section = []
-            for ln in lines[header_idx+1:]:
-                if stop_re.search(ln):
-                    break
-                section.append(ln)
-            samedi_slots = [ln for ln in section if re.search(r"^\s*samedi\s*:", ln, re.IGNORECASE) and re.search(r"\d", ln)]
-            if len(samedi_slots) >= 2:
-                levels = ["Débutants", "Avancés"]
-    if len(levels) > 1:
-        levels.sort(key=lambda x: 0 if x.startswith("Début") else 1)
     return levels
 
-# ---------- Helpers dates/tablao
+# ---------- Helpers dates/tablao (robuste)
 
 MONTHS_FR = {
     "janvier": 1, "février": 2, "fevrier": 2, "mars": 3, "avril": 4, "mai": 5,
@@ -143,12 +134,13 @@ def _parse_date_str(s: str):
         if y is not None and y < 100:
             y += 2000
         return (y, mth, d)
-    m2 = re.search(r"\b(\d{1,2})\s+([a-zéûîôàèùç]{3,9})\s*(\d{4})?\b", s, re.IGNORECASE)
+    m2 = re.search(r"\b(\d{1,2})\s+([a-zéûîôàèùç]{3,9})\s*(\d{4})?\b", s, flags=re.IGNORECASE)
     if m2:
         d = int(m2.group(1))
-        mon = MONTHS_FR.get(m2.group(2).lower())
-        y = int(m2.group(3)) if m2.group(3) else None
+        mon = m2.group(2).lower()
+        mon = MONTHS_FR.get(mon, MONTHS_FR.get(mon[:4], None))
         if mon:
+            y = int(m2.group(3)) if m2.group(3) else None
             return (y, mon, d)
     return None
 
@@ -172,19 +164,29 @@ def parse_tablao_text_robuste(full_text: str):
     heure = r"(\d{1,2})\s*(?:h|:)\s*([0-5]?\d)?"
     pat = re.compile(
         rf"(?P<date>{date_any})\s*(?:[àa]|[-–—]|,)?\s*{heure}(?:\s*[–—\-,:]\s*(?P<title>[^\n\r]+))?",
-        re.IGNORECASE
+        flags=re.IGNORECASE
     )
-    seen, out = set(), []
+    seen = set()
+    out = []
     for m in pat.finditer(txt):
-        date_raw, h, mn, titre = m.group("date"), m.group(1), m.group(2), _clean_title(m.group("title") or "")
+        date_raw = m.group("date")
+        h = m.group(1); mn = m.group(2)
+        titre = _clean_title(m.group("title") or "")
         ymd = _parse_date_str(date_raw)
         date_fmt = _fmt_ddmmyyyy(*ymd) if ymd else date_raw
+        if not date_fmt:
+            date_fmt = date_raw
         heure_fmt = f"{int(h)}h{mn}" if mn else f"{int(h)}h"
         key = (date_fmt, heure_fmt, titre)
         if key in seen:
             continue
         seen.add(key)
-        out.append({"date": date_fmt, "heure": heure_fmt, "titre": titre, "artiste": titre})
+        out.append({
+            "date": date_fmt,
+            "heure": heure_fmt,
+            "titre": titre,
+            "artiste": titre
+        })
     return out
 
 def _fetch_text(url: str, headers: dict) -> str:
@@ -198,7 +200,8 @@ def _fetch_text(url: str, headers: dict) -> str:
 def parse_stage_text_robuste(full_text: str) -> list[dict]:
     txt = normalize_text(full_text)
     blocks = [b.strip() for b in re.split(r"\n{1,}", txt) if b.strip()]
-    out, seen = [], set()
+    out = []
+    seen = set()
     mois = r"(?:janvier|février|fevrier|mars|avril|mai|juin|juillet|ao[uû]t|septembre|octobre|novembre|d[ée]cembre|janv|févr|fevr|sept|oct|nov|déc|dec)"
     date_num = r"(?:\d{1,2}[\/\-.]\d{1,2}(?:[\/\-.]\d{2,4})?)"
     date_txt = rf"(?:\d{{1,2}}\s+{mois}(?:\s+\d{{4}})?)"
@@ -213,6 +216,8 @@ def parse_stage_text_robuste(full_text: str) -> list[dict]:
             continue
         for m in pat.finditer(b):
             d_raw = m.group("date") or m.group("date2")
+            if not d_raw:
+                continue
             ymd = _parse_date_str(d_raw)
             date_fmt = _fmt_ddmmyyyy(*ymd) if ymd else d_raw
             h = m.group(2) if m.group(2) else m.group(4)
@@ -226,7 +231,12 @@ def parse_stage_text_robuste(full_text: str) -> list[dict]:
             if key in seen:
                 continue
             seen.add(key)
-            out.append({"date": date_fmt, "heure": heure_fmt, "titre": titre, "tag": "stage"})
+            out.append({
+                "date": date_fmt,
+                "heure": heure_fmt,
+                "titre": titre,
+                "tag": "stage"
+            })
     return out
 
 # ---------- Routes
@@ -279,7 +289,10 @@ def infos_tablao():
         replace_br_with_newlines(soup)
         texte_complet = normalize_text(soup.get_text(separator="\n", strip=True))
         tablaos = parse_tablao_text_robuste(texte_complet)
-        tablaos_vocal = [{**t, "heure_vocal": remplacer_h_par_heure(t.get("heure", ""))} for t in tablaos]
+        tablaos_vocal = [
+            {**t, "heure_vocal": remplacer_h_par_heure(t.get("heure", ""))}
+            for t in tablaos
+        ]
         match = re.search(r"Prix\s+du\s+tablao\s*[:\-]?\s*(\d{1,3})\s*€", texte_complet, re.IGNORECASE)
         prix_tablao = match.group(1) + " €" if match else "Prix tablao non disponible"
         return jsonify({
@@ -298,4 +311,27 @@ def infos_stage_solea():
         txt_home = _fetch_text("https://www.centresolea.org", headers)
         txt_hor = _fetch_text("https://www.centresolea.org/horaires-et-tarifs", headers)
         txt = f"{txt_home}\n\n{txt_hor}"
-       
+        stages = parse_stage_text_robuste(txt)
+        stages_vocal = [
+            {**s, "heure_vocal": remplacer_h_par_heure(s.get("heure", ""))}
+            for s in stages
+        ]
+        if not stages:
+            return jsonify({
+                "source": ["https://www.centresolea.org", "https://www.centresolea.org/horaires-et-tarifs"],
+                "stages": [],
+                "message": "Aucune occurrence de 'stage' avec date/heure détectée dans les pages sources."
+            })
+        return jsonify({
+            "source": ["https://www.centresolea.org", "https://www.centresolea.org/horaires-et-tarifs"],
+            "stages": stages,
+            "stages_vocal": stages_vocal
+        })
+    except requests.exceptions.Timeout:
+        return jsonify({"erreur": "Timeout lors de la récupération des pages sources."}), 504
+    except Exception as e:
+        return jsonify({"erreur": str(e)}), 500
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
