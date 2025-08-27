@@ -192,36 +192,58 @@ def _fetch_soup(url: str, headers: dict) -> BeautifulSoup:
     replace_br_with_newlines(soup)
     return soup
 
-# ---------- Parsing DOM de la home (événements à venir)
+# ---------- Parsing DOM de la home (événements à venir) — version robuste
 
 DAY_TXT = r"(?:lun\.?|mar\.?|mer\.?|jeu\.?|ven\.?|sam\.?|dim\.?|lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)"
 MONTH_TXT = r"(?:janvier|février|fevrier|mars|avril|mai|juin|juillet|ao[uû]t|sept\.?|septembre|oct\.?|octobre|nov\.?|novembre|d[ée]c\.?|d[ée]cembre)"
-DATE_LINE_RE = re.compile(rf"^\s*(?:{DAY_TXT}\s+)?(\d{{1,2}})\s+({MONTH_TXT})(?:\s+(\d{{4}}))?\s*$", re.IGNORECASE)
+DATE_LINE_RE = re.compile(rf"^\s*(?:{DAY_TXT}\s+)?(\d{{1,2}})\s+({MONTH_TXT})(?:\s+(\d{{4}}))?.*$", re.IGNORECASE)
+TIME_INLINE_RE = re.compile(r"\b(\d{1,2})\s*h\s*([0-5]?\d)?\b|\b(\d{1,2}):([0-5]\d)\b", re.IGNORECASE)
 
 def _month_fr_to_int(mon: str) -> int | None:
     mon = (mon or "").lower().rstrip(".")
     return MONTHS_FR.get(mon)
 
-def _normalize_home_date(line: str, tz="Europe/Madrid") -> str | None:
+def _normalize_home_date_any(line: str, tz="Europe/Madrid") -> tuple[str | None, str]:
     """
-    Convertit 'dim. 07 sept.' en '07/09/AAAA' (année courante si absente).
+    Retourne (date_dd/mm/yyyy, heure) depuis une ligne comme :
+      - 'dim. 07 sept.' → ('07/09/AAAA', '')
+      - 'Lundi 8 septembre 2025 à 18h30' → ('08/09/2025', '18h30')
+      - 'ven. 26 sept. 20:30' → ('26/09/AAAA', '20h30')
     """
-    m = DATE_LINE_RE.match(line or "")
-    if not m:
-        return None
-    d = int(m.group(1))
-    mon = _month_fr_to_int(m.group(2))
-    y = m.group(3)
-    if not mon:
-        return None
-    if y:
-        y = int(y)
-    else:
-        y = datetime.now(ZoneInfo(tz) if ZoneInfo else None).year
-    return f"{d:02d}/{mon:02d}/{y:04d}"
+    line = (line or "").strip()
+    if not line:
+        return None, ""
+    # Heure intégrée
+    hm = TIME_INLINE_RE.search(line)
+    heure = ""
+    if hm:
+        if hm.group(1):  # 18h30 / 18h
+            h = int(hm.group(1))
+            mn = hm.group(2)
+            heure = f"{h}h{mn}" if mn else f"{h}h"
+        else:            # 20:30
+            h = int(hm.group(3))
+            mn = hm.group(4)
+            heure = f"{h}h{mn}"
+    # Date
+    m = DATE_LINE_RE.match(line)
+    if m:
+        d = int(m.group(1))
+        mon = _month_fr_to_int(m.group(2))
+        y = m.group(3)
+        if mon:
+            if y:
+                y = int(y)
+            else:
+                y = datetime.now(ZoneInfo(tz) if ZoneInfo else None).year
+            return f"{d:02d}/{mon:02d}/{y:04d}", heure
+    ymd = _parse_date_str(line)
+    if ymd:
+        return _fmt_ddmmyyyy(*ymd), heure
+    return None, heure
 
 def _looks_like_time(s: str) -> bool:
-    return bool(re.search(r"\b\d{1,2}\s*h\s*\d{0,2}\b", (s or ""), re.IGNORECASE))
+    return bool(re.search(r"\b\d{1,2}\s*h\s*\d{0,2}\b|\b\d{1,2}:\d{2}\b", (s or ""), re.IGNORECASE))
 
 H_RE = re.compile(r"\b(?P<h>\d{1,2})\s*h\s*(?P<mn>[0-5]\d)?\b", re.IGNORECASE)
 
@@ -231,7 +253,6 @@ def _extract_times_from_text(txt: str) -> list[str]:
         h = int(mh.group("h"))
         mn = mh.group("mn")
         times.append(f"{h}h{mn}" if mn else f"{h}h")
-    # dédoublonner
     seen = set(); uniq = []
     for t in times:
         if t not in seen:
@@ -243,54 +264,54 @@ LIEU_RE = re.compile(r"(?:\b(?:à|au|aux|chez)\s+)([^—\-:,()\n]+)", re.IGNOREC
 
 def parse_evenements_home_dom(home_soup: BeautifulSoup, base_url: str, tz="Europe/Madrid") -> list[dict]:
     """
-    Récupère les cartes sous 'Les événements à venir' via le DOM :
-    - titre = texte du lien /events/ (hors 'En savoir plus')
-    - date = ligne juste sous le titre (normalisée)
-    - lieu = ligne suivante (si ce n'est pas une heure)
-    - artiste = heuristique 'avec ...' sinon '' (pour tablao: fallback = titre)
-    - url_detail = href du lien titre
-    - type = 'tablao' si titre contient 'tablao', sinon 'evenement'
+    Pour chaque lien-titre /events/, on parcourt les éléments SUIVANTS dans le DOM
+    jusqu’au prochain lien /events/ ou un 'En savoir plus', pour extraire :
+      - date (et heure possible sur la même ligne)
+      - lieu (ligne suivante non-heure)
+    Puis on détermine type (tablao/événement), artiste (heuristique 'avec ...'),
+    et on stocke url_detail pour l’enrichissement deep.
     """
     events = []
 
-    # 1) Trouver la section "Les événements à venir"
+    # Trouver la section “Les événements à venir” si présente
     hroot = home_soup
     for cand in home_soup.find_all(["h2", "h3"]):
         if "événements à venir" in cand.get_text(" ", strip=True).lower():
             hroot = cand.parent
             break
 
-    # 2) Repérer les liens de titres vers /events/
+    # Repérer les liens de titre vers /events/ (hors "En savoir plus")
     title_links = []
     for a in hroot.select("a[href]"):
         href = a.get("href", "")
         txt = a.get_text(" ", strip=True)
-        if not href or "en savoir plus" in (txt or "").lower():
+        if not href:
             continue
-        if "/events/" in href:
+        if "/events/" in href and "en savoir plus" not in (txt or "").lower():
             title_links.append(a)
 
-    # 3) Pour chaque lien-titre, lire les frères suivants : date puis lieu
     for a in title_links:
         titre = _clean_title(a.get_text(" ", strip=True))
         url = urljoin(base_url, a.get("href"))
         date_line = ""
         lieu_line = ""
-        # on parcours quelques siblings (sécurité)
-        steps = 0
-        for sib in a.parent.next_siblings:
-            steps += 1
-            if steps > 8:  # limite de sécurité
-                break
-            t = ""
-            if isinstance(sib, Tag):
-                t = sib.get_text(" ", strip=True)
+        # Parcours avant (find_all_next) jusqu’à la prochaine carte /events/ ou "En savoir plus"
+        for node in a.find_all_next():
+            if node.name == "a":
+                href = node.get("href", "")
+                txt = node.get_text(" ", strip=True).lower()
+                if "/events/" in href and node is not a:
+                    break
+                if "en savoir plus" in txt and node is not a:
+                    break
+            if isinstance(node, Tag):
+                t = node.get_text(" ", strip=True)
             else:
-                t = str(sib).strip()
+                t = str(node).strip()
             if not t:
                 continue
-            if (isinstance(sib, Tag) and sib.name == "a" and "/events/" in sib.get("href", "")) or ("en savoir plus" in t.lower()):
-                break
+            if t == titre:
+                continue
             if not date_line:
                 date_line = t
                 continue
@@ -299,23 +320,18 @@ def parse_evenements_home_dom(home_soup: BeautifulSoup, base_url: str, tz="Europ
                     lieu_line = t
                 break
 
-        # Normaliser date
-        ymd = _parse_date_str(date_line)
-        if ymd:
-            date_fmt = _fmt_ddmmyyyy(*ymd)
-        else:
-            date_fmt = _normalize_home_date(date_line, tz=tz)
+        # Normaliser date & heure depuis la ligne date
+        date_fmt, heure_fmt = _normalize_home_date_any(date_line, tz=tz)
         if not date_fmt:
-            # sans date exploitable, on ignore la carte
+            ymd = _parse_date_str(date_line)
+            if ymd:
+                date_fmt = _fmt_ddmmyyyy(*ymd)
+        if not date_fmt:
             continue
 
         typ = "tablao" if re.search(r"\btablao\b", titre, re.IGNORECASE) else "evenement"
-
-        # Artiste
         m_art = re.search(r"\bavec\s+(.+)$", titre, re.IGNORECASE)
         artiste = _clean_title(m_art.group(1)) if m_art else (titre if typ == "tablao" else "")
-
-        # Lieu propre
         lieu = _clean_title(lieu_line)
         if _looks_like_time(lieu):
             lieu = ""
@@ -325,12 +341,12 @@ def parse_evenements_home_dom(home_soup: BeautifulSoup, base_url: str, tz="Europ
             "artiste": artiste,
             "lieu": lieu,
             "date": date_fmt,
-            "heure": "",
+            "heure": heure_fmt or "",
             "type": typ,
             "url_detail": url
         })
 
-    # dédoublonner par (titre, date, url_detail)
+    # Dédoublonner
     seen = set(); uniq = []
     for e in events:
         key = (e["titre"], e["date"], e["url_detail"])
@@ -444,7 +460,7 @@ def infos_tablao():
         if only == "tablao":
             items = [e for e in items if e["type"] == "tablao"]
 
-        # 3) Ne garder que les dates futures (sauf all_dates=true)
+        # 3) Ne garder que les dates futures (par défaut)
         future_items = []
         for e in items:
             ymd = _parse_date_str(e["date"])
